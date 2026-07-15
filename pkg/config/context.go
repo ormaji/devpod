@@ -97,7 +97,7 @@ var ContextOptions = []ContextOption{
 	{
 		Name:        ContextOptionAgentInjectTimeout,
 		Description: "Specifies the timeout to inject the agent",
-		Default:     "20",
+		Default:     "180",
 	},
 	{
 		Name:        ContextOptionRegistryCache,

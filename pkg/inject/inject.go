@@ -67,7 +67,13 @@ func Inject(opts InjectOptions) (bool, error) {
 		return true, err
 	}
 
-	opts.Log.Debug("execute inject script")
+	opts.Log.Debugf(
+		"execute inject script: timeout=%s installPath=%s preferDownload=%t command=%t",
+		opts.Timeout,
+		opts.ScriptParams.AgentRemotePath,
+		opts.ScriptParams.PreferAgentDownload,
+		opts.ScriptParams.Command != "",
+	)
 	defer opts.Log.Debug("done injecting")
 
 	// start script
@@ -105,8 +111,12 @@ func Inject(opts InjectOptions) (bool, error) {
 		err := opts.Exec(cancelCtx, scriptRawCode, stdinReader, stdoutWriter, delayedStderr)
 		if err != nil && !errors.Is(err, context.Canceled) &&
 			!strings.Contains(err.Error(), "signal: ") {
+			opts.Log.Errorf("inject script exec failed: err=%v stderr=%s", err, strings.TrimSpace(string(delayedStderr.Buffer())))
 			execErrChan <- command.WrapCommandError(delayedStderr.Buffer(), err)
 		} else {
+			if err != nil {
+				opts.Log.Debugf("inject script exec stopped: err=%v", err)
+			}
 			execErrChan <- nil
 		}
 	}()
@@ -137,15 +147,19 @@ func Inject(opts InjectOptions) (bool, error) {
 	var result injectResult
 	select {
 	case err = <-execErrChan:
+		opts.Log.Debugf("inject script exec finished first: err=%v", err)
 		result = <-injectChan
 	case result = <-injectChan:
+		opts.Log.Debugf("inject protocol finished first: wasExecuted=%t err=%v", result.wasExecuted, result.err)
 		// we don't wait for the command termination here and will just retry on error
 	}
 
 	// prefer result error
 	if result.err != nil {
+		opts.Log.Errorf("inject protocol failed: wasExecuted=%t err=%v", result.wasExecuted, result.err)
 		return result.wasExecuted, result.err
 	} else if err != nil {
+		opts.Log.Errorf("inject script failed: wasExecuted=%t err=%v", result.wasExecuted, err)
 		return result.wasExecuted, err
 	} else if result.wasExecuted || opts.ScriptParams.Command == "" {
 		return result.wasExecuted, nil
@@ -182,20 +196,26 @@ func inject(
 	}()
 
 	// wait for line to be read
+	log.Debugf("waiting for inject handshake: timeout=%s", timeout)
 	err := waitForMessage(errChan, timeout)
 	if err != nil {
-		return false, err
+		log.Errorf("inject handshake timed out waiting for ping: timeout=%s err=%v", timeout, err)
+		return false, fmt.Errorf("wait for inject handshake ping: %w", err)
 	}
+	log.Debugf("received inject handshake line: line=%s", strings.TrimSpace(line))
 
 	err = performMutualHandshake(line, stdin)
 	if err != nil {
-		return false, err
+		log.Errorf("inject handshake failed: line=%s err=%v", strings.TrimSpace(line), err)
+		return false, fmt.Errorf("perform inject handshake: %w", err)
 	}
+	log.Debug("inject handshake completed")
 
 	// wait until we read something
 	line, err = readLine(stdout)
 	if err != nil {
-		return false, err
+		log.Errorf("failed to read inject command line after handshake: err=%v", err)
+		return false, fmt.Errorf("read inject command line: %w", err)
 	}
 	log.Debugf("received line after pong: line=%s", line)
 

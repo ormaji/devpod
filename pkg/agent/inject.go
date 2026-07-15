@@ -189,22 +189,32 @@ func InjectAgent(opts *InjectOptions) error {
 	}
 
 	opts.Log.Debug("starting agent injection")
+	attempt := 0
 	return retry.OnError(backoff, func(err error) bool {
 		if opts.Ctx.Err() != nil {
+			opts.Log.Errorf("stopping agent injection retries because context is done: %v", opts.Ctx.Err())
 			return false
 		}
 		if errors.Is(err, docker.ErrContainerTerminal) {
 			opts.Log.Errorf("container entered a terminal state, not retrying: %v", err)
 			return false
 		}
-		opts.Log.Debugf("retrying injection: %v", err)
+		opts.Log.Debugf("retrying injection: attempt=%d err=%v", attempt, err)
 		return true
 	}, func() error {
-		return injectAgent(&injectContext{
+		attempt++
+		opts.Log.Debugf("agent injection attempt started: attempt=%d", attempt)
+		err := injectAgent(&injectContext{
 			opts: opts,
 			bm:   bm,
 			vc:   vc,
 		})
+		if err != nil {
+			opts.Log.Errorf("agent injection attempt failed: attempt=%d err=%v", attempt, err)
+		} else {
+			opts.Log.Debugf("agent injection attempt succeeded: attempt=%d", attempt)
+		}
+		return err
 	})
 }
 
